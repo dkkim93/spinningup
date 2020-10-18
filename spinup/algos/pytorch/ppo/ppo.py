@@ -7,6 +7,7 @@ import spinup.algos.pytorch.ppo.core as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from tensorboardX import SummaryWriter
 
 
 class PPOBuffer:
@@ -254,6 +255,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
+    # Set up tensorboard logging
+    tb_writer = SummaryWriter()
+
     def update():
         data = buf.get()
 
@@ -292,15 +296,17 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
+    o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        logging_ret, logging_cost = [], []
         for t in range(local_steps_per_epoch):
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
-            next_o, r, d, _ = env.step(a)
-            ep_ret += r
+            next_o, r, d, info = env.step(a)
+            ep_ret += r * pow(0.99, ep_len)
+            ep_cost += info["cost"] * pow(0.99, ep_len)
             ep_len += 1
 
             # save and log
@@ -325,9 +331,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 buf.finish_path(v)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
+                    logging_ret.append(ep_ret)
+                    logging_cost.append(ep_cost)
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, ep_ret, ep_len = env.reset(), 0, 0
+                o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
 
+        logging_ret = sum(logging_ret) / len(logging_ret)
+        logging_cost = sum(logging_cost) / len(logging_cost)
+        print(epoch, logging_ret, logging_cost)
+        tb_writer.add_scalar("objective", logging_ret, epoch)
+        tb_writer.add_scalar("cost", logging_cost, epoch)
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -353,26 +366,26 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
-if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=4000)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='ppo')
-    args = parser.parse_args()
-
-    mpi_fork(args.cpu)  # run parallel code with mpi
-
-    from spinup.utils.run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-
-    ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
-        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
+# if __name__ == '__main__':
+#     import argparse
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument('--env', type=str, default='HalfCheetah-v2')
+#     parser.add_argument('--hid', type=int, default=64)
+#     parser.add_argument('--l', type=int, default=2)
+#     parser.add_argument('--gamma', type=float, default=0.99)
+#     parser.add_argument('--seed', '-s', type=int, default=0)
+#     parser.add_argument('--cpu', type=int, default=4)
+#     parser.add_argument('--steps', type=int, default=4000)
+#     parser.add_argument('--epochs', type=int, default=50)
+#     parser.add_argument('--exp_name', type=str, default='ppo')
+#     args = parser.parse_args()
+# 
+#     mpi_fork(args.cpu)  # run parallel code with mpi
+# 
+#     from spinup.utils.run_utils import setup_logger_kwargs
+#     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+# 
+#     ppo(lambda : gym.make(args.env), actor_critic=core.MLPActorCritic,
+#         ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma, 
+#         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
+#         logger_kwargs=logger_kwargs)
