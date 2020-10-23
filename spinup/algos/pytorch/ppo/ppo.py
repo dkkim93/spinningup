@@ -256,7 +256,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     logger.setup_pytorch_saver(ac)
 
     # Set up tensorboard logging
-    tb_writer = SummaryWriter()
+    tb_writer = SummaryWriter("tb_ppo_seed::" + str(seed))
 
     def update():
         data = buf.get()
@@ -296,7 +296,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
+    o, ep_ret, ep_cost, ep_len, ep_count = env.reset(), 0, 0, 0, 0
+    log_name = "ppo_seed::" + str(seed) + "_log"
+
+    from utils import set_log
+    log = set_log(log_name)
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -334,13 +338,20 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     logging_ret.append(ep_ret)
                     logging_cost.append(ep_cost)
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    log[log_name].info("At iteration {}, cost: {}".format(ep_count, ep_cost))
+                    log[log_name].info("At iteration {}, return: {}".format(ep_count, ep_ret))
+                    tb_writer.add_scalar("objective", ep_ret, ep_count)
+                    tb_writer.add_scalar("cost", ep_cost, ep_count)
+                    ep_count += 1
+                    if ep_count >= 200000:
+                        import sys
+                        sys.exit()
                 o, ep_ret, ep_cost, ep_len = env.reset(), 0, 0, 0
+
 
         logging_ret = sum(logging_ret) / len(logging_ret)
         logging_cost = sum(logging_cost) / len(logging_cost)
         print(epoch, logging_ret, logging_cost)
-        tb_writer.add_scalar("objective", logging_ret, epoch)
-        tb_writer.add_scalar("cost", logging_cost, epoch)
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):

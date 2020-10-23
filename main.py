@@ -8,4 +8,5 @@ ppo(
     gamma=0.99,
     max_ep_len=1000,
     lam=0.95,
-    epochs=100000)
+    epochs=100000,
+    seed=1)
